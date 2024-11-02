@@ -15,7 +15,7 @@ using System.Text;
 
 namespace TelegramToDiscordBot
 {
-    class Program
+    class StartBot
     {
         // Объявляем клиентов для Discord и Telegram
         private static DiscordClient discordClient = null!;
