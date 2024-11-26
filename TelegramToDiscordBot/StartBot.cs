@@ -20,8 +20,8 @@ namespace TelegramToDiscordBot
         // Объявляем клиентов для Discord и Telegram
         private static DiscordClient discordClient = null!;
         private static TelegramBotClient telegramBotClient = null!;
-        private static string discordChannelId = "ВАШ ID КАНАЛА DISCORD"; // Укажите ваш ID канала Discord
-        private static string telegramBotToken = "ВАШ ТОКЕН БОТА TG"; // Укажите ваш токен бота Telegram
+        private static string discordChannelId = ""; // Укажите ваш ID канала Discord
+        private static string telegramBotToken = ""; // Укажите ваш токен бота Telegram
         private const int MaxFileSize = 50 * 1024 * 1024; // Максимальный размер файла - 50 МБ
 
         static async Task Main(string[] args)
@@ -31,7 +31,7 @@ namespace TelegramToDiscordBot
                 // Инициализация клиента Discord
                 discordClient = new DiscordClient(new DiscordConfiguration
                 {
-                    Token = "ТОКЕН БОТА DISCORD", // Укажите ваш токен бота Discord
+                    Token = "", // Укажите ваш токен бота Discord
                     TokenType = TokenType.Bot
                 });
                 await discordClient.ConnectAsync();
@@ -76,14 +76,7 @@ namespace TelegramToDiscordBot
                 var discordChannel = await discordClient.GetChannelAsync(ulong.Parse(discordChannelId));
                 var builder = new DiscordMessageBuilder();
 
-                // Обработка пересланных сообщений
-                //if (message.ForwardFromChat != null || message.ForwardFrom != null)
-                //{
-                //   string forwardInfo = message.ForwardFromChat?.Title ?? message.ForwardFrom?.FirstName ?? "Пользователь";
-                //   builder.WithContent($"Сообщение переслано из: {forwardInfo}");
-                //}
-
-                // Переменная для хранения текста сообщения
+                
                 string originalText = message.Text ?? string.Empty;
 
                 // Удаляем строки, содержащие "КиберТопор"
@@ -129,10 +122,7 @@ namespace TelegramToDiscordBot
                 {
                     await discordChannel.SendMessageAsync(builder);
                 }
-                //if (builder.Content != null || builder.Files.Any())
-                //{
-                //    await discordChannel.SendMessageAsync(builder);
-                //}
+               
 
             }
             catch (Exception ex)
