@@ -2,6 +2,7 @@
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,249 +12,304 @@ using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
-using System.Text;
+using TelegramToDiscordBot.Models;
+
+
+
+
+
+using TelegramMessageType = Telegram.Bot.Types.Enums.MessageType;
+
 
 namespace TelegramToDiscordBot
 {
+    // Основной класс для запуска бота
     class StartBot
     {
-        // Объявляем клиентов для Discord и Telegram
-        private static DiscordClient discordClient = null!;
-        private static TelegramBotClient telegramBotClient = null!;
-        private static string discordChannelId = ""; // Укажите ваш ID канала Discord
-        private static string telegramBotToken = ""; // Укажите ваш токен бота Telegram
-        private const int MaxFileSize = 50 * 1024 * 1024; // Максимальный размер файла - 50 МБ
+
 
         static async Task Main(string[] args)
         {
             try
             {
-                // Инициализация клиента Discord
-                discordClient = new DiscordClient(new DiscordConfiguration
-                {
-                    Token = "", // Укажите ваш токен бота Discord
-                    TokenType = TokenType.Bot
-                });
-                await discordClient.ConnectAsync();
+                // Загрузка конфигурации
+                var config = ConfigurationLoader.LoadConfig();
 
-                // Инициализация клиента Telegram
-                telegramBotClient = new TelegramBotClient(telegramBotToken);
+                // Инициализация ботов
+                var telegramHandler = new TelegramHandler(config.TelegramToken);
+                var discordHandler = new DiscordHandler(config.DiscordToken, config.DiscordChannelId);
+                var messageProcessor = new MessageProcessor(discordHandler, telegramHandler);
 
-                // Настройка обработчика получения обновлений
-                var receiverOptions = new ReceiverOptions
-                {
-                    AllowedUpdates = Array.Empty<UpdateType>() // Получение всех типов обновлений
-                };
-
-                // Запуск получения сообщений
-                telegramBotClient.StartReceiving(
-                    HandleUpdateAsync, // Обработчик сообщений
-                    HandleErrorAsync,  // Обработчик ошибок
-                    receiverOptions,
-                    CancellationToken.None
+                await discordHandler.ConnectAsync();
+                telegramHandler.StartReceiving(
+                    messageProcessor.ProcessTelegramMessageAsync,
+                    messageProcessor.HandleErrorAsync
                 );
 
                 Console.WriteLine("Бот запущен. Нажмите Enter для выхода.");
                 Console.ReadLine();
 
-                // Завершение программы, получатель остановится автоматически
-                await discordClient.DisconnectAsync();
+                await discordHandler.DisconnectAsync();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Произошла ошибка при запуске бота: {ex.Message}");
+                Console.WriteLine($"Ошибка: {ex.Message}");
             }
         }
 
-        // Обработчик обновлений от Telegram
-        private static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        // Конфигурация бота
+        public class BotConfig
         {
-            if (update.Message == null) return; // Проверка, что сообщение не пустое
+            public string TelegramToken { get; set; } = string.Empty;
+            public string DiscordToken { get; set; } = string.Empty;
+            public ulong DiscordChannelId { get; set; }
+            public const int MaxFileSize = 50 * 1024 * 1024; // 50 MB // Максимальный размер файла
+        }
 
-            try
+        // Класс для работы с Telegram
+        public class TelegramHandler
+        {
+            private readonly TelegramBotClient _telegramBotClient;
+            private readonly string _telegramToken;
+
+            public TelegramHandler(string token)
             {
-                var message = update.Message;
-                var discordChannel = await discordClient.GetChannelAsync(ulong.Parse(discordChannelId));
-                var builder = new DiscordMessageBuilder();
+                _telegramToken = token; // Сохраняем токен для использования в запросах
+                _telegramBotClient = new TelegramBotClient(token);
+            }
 
-                
-                string originalText = message.Text ?? string.Empty;
+            public void StartReceiving(Func<ITelegramBotClient, Update, CancellationToken, Task> handleUpdate,
+                                       Func<ITelegramBotClient, Exception, CancellationToken, Task> handleError)
+            {
+                var receiverOptions = new ReceiverOptions { AllowedUpdates = Array.Empty<UpdateType>() };
+                _telegramBotClient.StartReceiving(handleUpdate, handleError, receiverOptions, CancellationToken.None);
+            }
 
-                // Удаляем строки, содержащие "КиберТопор"
-                if (!string.IsNullOrEmpty(originalText))
+            public async Task<Telegram.Bot.Types.File> GetFileAsync(string fileId, CancellationToken cancellationToken) =>
+                await _telegramBotClient.GetFile(fileId, cancellationToken);
+
+            public async Task<Stream> DownloadFileAsync(string filePath, CancellationToken cancellationToken)
+            {
+                // Используем токен, сохранённый при инициализации
+                var fileUrl = $"https://api.telegram.org/file/bot{_telegramToken}/{filePath}";
+                using var httpClient = new HttpClient();
+                return await httpClient.GetStreamAsync(fileUrl);
+            }
+        }
+
+        // Класс для работы с Discord
+        public class DiscordHandler
+        {
+            private readonly DiscordClient _discordClient;
+            private readonly ulong _channelId;
+
+            public DiscordHandler(string token, ulong channelId)
+            {
+                _discordClient = new DiscordClient(new DiscordConfiguration
                 {
-                    originalText = RemoveLinesContaining(originalText, "КиберТопор");
-                    Console.WriteLine($"Очищенный текст: {originalText}"); // Для отладки
-                    if (!string.IsNullOrEmpty(originalText))
+                    Token = token,
+                    TokenType = TokenType.Bot
+                });
+                _channelId = channelId;
+            }
+
+            public async Task ConnectAsync() => await _discordClient.ConnectAsync();
+            public async Task DisconnectAsync() => await _discordClient.DisconnectAsync();
+
+            public async Task SendMessageAsync(DiscordMessageBuilder messageBuilder)
+            {
+                var channel = await _discordClient.GetChannelAsync(_channelId);
+                await channel.SendMessageAsync(messageBuilder);
+            }
+        }
+
+        // Класс для обработки сообщений
+        public class MessageProcessor
+        {
+            private readonly DiscordHandler _discordHandler;
+            private readonly TelegramHandler _telegramHandler;
+
+            public MessageProcessor(DiscordHandler discordHandler, TelegramHandler telegramHandler)
+            {
+                _discordHandler = discordHandler;
+                _telegramHandler = telegramHandler;
+            }
+
+            public async Task ProcessTelegramMessageAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+            {
+                if (update.Message == null) return;
+
+                var message = update.Message;
+
+                try
+                {
+                    // Проверка текста без медиа
+                    if (!string.IsNullOrEmpty(message.Text) && message.Type == TelegramMessageType.Text)
                     {
-                        builder.WithContent(originalText);
+                        if (message.Text.Length > 2000)
+                        {
+                            Console.WriteLine("Текстовое сообщение превышает 2000 символов и не будет отправлено.");
+                            return;
+                        }
+
+                        string formattedText = FormatTelegramHtmlToMarkdown(message.Text, message.Entities);
+                        var textBuilder = new DiscordMessageBuilder().WithContent(formattedText);
+                        await _discordHandler.SendMessageAsync(textBuilder);
+                        Console.WriteLine("Текстовое сообщение отправлено в Discord.");
+                    }
+
+                    // Собираем медиафайлы
+                    var mediaFiles = new List<FileDetails>();
+                    switch (message.Type)
+                    {
+                        case TelegramMessageType.Photo:
+                        case TelegramMessageType.Video:
+                        case TelegramMessageType.Document:
+                            await HandleMediaMessage(message, mediaFiles, cancellationToken);
+                            break;
+
+                        default:
+                            Console.WriteLine("Тип сообщения не поддерживается.");
+                            return;
+                    }
+
+                    // Если есть медиафайлы, отправляем их
+                    if (mediaFiles.Any())
+                    {
+                        await SendMediaFiles(message, mediaFiles.AsReadOnly(), cancellationToken);
                     }
                 }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка при обработке сообщения: {ex.Message}");
+                }
+            }
 
-                // Обработка различных типов сообщений
+            private async Task HandleMediaMessage(Message message, List<FileDetails> mediaFiles, CancellationToken cancellationToken)
+            {
+                string? caption = message.Caption;
+
+                // Проверка длины подписи
+                if (!string.IsNullOrEmpty(caption) && caption.Length > 2000)
+                {
+                    Console.WriteLine("Подпись к медиафайлу превышает 2000 символов и не будет отправлена.");
+                    caption = null; // Удаляем подпись, чтобы не отправлять её
+                }
+
                 switch (message.Type)
                 {
-                    case Telegram.Bot.Types.Enums.MessageType.Photo:
-                        await HandleMediaWithCaption(builder, message.Photo.Last().FileId, message.Caption, message.CaptionEntities, "photo.jpg", "image/jpeg", cancellationToken);
+                    case TelegramMessageType.Photo:
+                        var photoFileId = message.Photo!.Last().FileId;
+                        await AddMediaFile(photoFileId, "photo.jpg", "image/jpeg", mediaFiles, cancellationToken);
                         break;
 
-                    case Telegram.Bot.Types.Enums.MessageType.Video:
-                        await HandleMediaWithCaption(builder, message.Video.FileId, message.Caption, message.CaptionEntities, "video.mp4", "video/mp4", cancellationToken);
+                    case TelegramMessageType.Video:
+                        var videoFileId = message.Video!.FileId;
+                        await AddMediaFile(videoFileId, "video.mp4", "video/mp4", mediaFiles, cancellationToken);
                         break;
 
-                    // Обработка текстовых сообщений
-                    case Telegram.Bot.Types.Enums.MessageType.Text:
-                        // Если сообщение не пересланное, просто добавляем текст
-                        if (message.ForwardFromChat == null && message.ForwardFrom == null)
-                        {
-                            string formattedText = FormatTelegramHtmlToMarkdown(message.Text, message.Entities);
-                            builder.WithContent(formattedText);
-                        }
+                    case TelegramMessageType.Document:
+                        var documentFileId = message.Document!.FileId;
+                        await AddMediaFile(documentFileId, "document", message.Document.MimeType ?? "application/octet-stream", mediaFiles, cancellationToken);
                         break;
-
-                    default:
-                        Console.WriteLine("Тип сообщения не поддерживается");
-                        return;
                 }
 
+                Console.WriteLine("Медиафайлы собраны для отправки.");
+            }
 
-                // Проверка содержимого и отправка сообщения в Discord
-                if (!string.IsNullOrEmpty(builder.Content) || builder.Files.Any())
+            private async Task AddMediaFile(string fileId, string fileName, string fileType, List<FileDetails> mediaFiles, CancellationToken cancellationToken)
+            {
+                var fileInfo = await _telegramHandler.GetFileAsync(fileId, cancellationToken);
+
+                // Проверяем размер файла
+                if (fileInfo.FileSize > BotConfig.MaxFileSize)
                 {
-                    await discordChannel.SendMessageAsync(builder);
-                }
-               
-
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при обработке сообщения: {ex.Message}");
-            }
-        }
-
-        // Метод для удаления строк, содержащих заданное слово
-        private static string RemoveLinesContaining(string input, string keyword)
-        {
-            var lines = input.Split(new[] { "\n", "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
-            var cleanedLines = lines.Where(line => !line.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-            return string.Join("\n", cleanedLines).Trim();
-        }
-
-        // Метод для обработки медиа с подписью
-        private static async Task HandleMediaWithCaption(DiscordMessageBuilder builder, string fileId, string? caption, MessageEntity[]? captionEntities, string fileName, string fileType, CancellationToken cancellationToken)
-        {
-            try
-            {
-                if (!string.IsNullOrEmpty(caption))
-                {
-                    string formattedCaption = FormatTelegramHtmlToMarkdown(caption, captionEntities);
-                    builder.WithContent(formattedCaption);
-                }
-                await AttachFileToBuilder(builder, fileId, fileName, fileType, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при обработке медиа: {ex.Message}");
-            }
-        }
-
-        // Метод для присоединения файла к Discord
-        private static async Task AttachFileToBuilder(DiscordMessageBuilder builder, string fileId, string fileName, string fileType, CancellationToken cancellationToken)
-        {
-            try
-            {
-                var fileInfo = await telegramBotClient.GetFileAsync(fileId, cancellationToken);
-
-                if (fileInfo.FileSize > MaxFileSize)
-                {
-                    Console.WriteLine($"Файл {fileName} слишком большой для загрузки из Telegram (размер: {fileInfo.FileSize / (1024 * 1024)} МБ)");
+                    Console.WriteLine($"Файл {fileName} слишком большой ({fileInfo.FileSize / (1024 * 1024)} МБ) и не будет отправлен.");
                     return;
                 }
 
-                var fileUrl = $"https://api.telegram.org/file/bot{telegramBotToken}/{fileInfo.FilePath}";
-
-                using var client = new HttpClient();
-                var fileData = await client.GetByteArrayAsync(fileUrl);
-
-                if (fileData.Length > MaxFileSize)
+                var fileStream = await _telegramHandler.DownloadFileAsync(fileInfo.FilePath!, cancellationToken);
+                mediaFiles.Add(new FileDetails
                 {
-                    Console.WriteLine($"Файл {fileName} слишком большой для отправки в Discord (размер: {fileData.Length / (1024 * 1024)} МБ)");
-                    return;
+                    FileId = fileId,
+                    FileName = fileName,
+                    FileType = fileType,
+                    FileStream = fileStream
+                });
+            }
+
+            private async Task SendMediaFiles(Message telegramMessage, IReadOnlyCollection<FileDetails> fileDetailsList, CancellationToken cancellationToken)
+            {
+                var discordMessageBuilder = new DiscordMessageBuilder();
+
+                if (!string.IsNullOrEmpty(telegramMessage.Caption))
+                {
+                    string formattedCaption = FormatTelegramHtmlToMarkdown(telegramMessage.Caption, telegramMessage.CaptionEntities);
+                    discordMessageBuilder.WithContent(formattedCaption);
                 }
 
-                builder.AddFile(fileName, new MemoryStream(fileData));
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при скачивании или добавлении файла: {ex.Message} \nПропуск...Жду следующего поста");
-            }
-        }
+                var fileStreams = new List<(string FileName, Stream FileStream)>();
 
-        private static string FormatTelegramHtmlToMarkdown(string text, MessageEntity[]? entities)
-        {
-            if (entities == null || entities.Length == 0) return text;
-
-            var sb = new StringBuilder();
-            int lastIndex = 0;
-
-            foreach (var entity in entities.OrderBy(e => e.Offset))
-            {
-                // Проверка на валидные индексы
-                if (lastIndex < entity.Offset)
+                try
                 {
-                    sb.Append(text.Substring(lastIndex, entity.Offset - lastIndex));
+                    foreach (var fileDetails in fileDetailsList)
+                    {
+                        fileStreams.Add((fileDetails.FileName, fileDetails.FileStream));
+                    }
+
+                    if (fileStreams.Any())
+                    {
+                        discordMessageBuilder.AddFiles(fileStreams.ToDictionary(fs => fs.FileName, fs => fs.FileStream));
+                        await _discordHandler.SendMessageAsync(discordMessageBuilder);
+                        Console.WriteLine("Медиафайлы отправлены в Discord.");
+                    }
+                }
+                finally
+                {
+                    foreach (var (_, stream) in fileStreams)
+                    {
+                        stream.Dispose();
+                    }
+                }
+            }
+
+
+            private static string FormatTelegramHtmlToMarkdown(string text, MessageEntity[]? entities)
+            {
+                if (entities == null || entities.Length == 0) return text;
+
+                var sb = new StringBuilder();
+                int lastIndex = 0;
+
+                foreach (var entity in entities.OrderBy(e => e.Offset))
+                {
+                    if (lastIndex < entity.Offset)
+                        sb.Append(text.Substring(lastIndex, entity.Offset - lastIndex));
+
+                    string content = text.Substring(entity.Offset, entity.Length);
+                    sb.Append(entity.Type switch
+                    {
+                        MessageEntityType.Bold => $"**{content}**",
+                        MessageEntityType.Italic => $"*{content}*",
+                        MessageEntityType.TextLink => $"[{content}]({entity.Url})",
+                        MessageEntityType.Url => $"[{content}]({content})",
+                        _ => content
+                    });
+
+                    lastIndex = entity.Offset + entity.Length;
                 }
 
-                switch (entity.Type)
-                {
-                    case MessageEntityType.TextLink when entity.Url != null:
-                        string linkText = text.Substring(entity.Offset, entity.Length);
-                        sb.Append($"[{linkText}]({entity.Url})");
-                        break;
+                if (lastIndex < text.Length)
+                    sb.Append(text.Substring(lastIndex));
 
-                    case MessageEntityType.Url:
-                        string url = text.Substring(entity.Offset, entity.Length);
-                        sb.Append($"[{url}]({url})");
-                        break;
-
-                    case MessageEntityType.Bold:
-                        if (entity.Offset + entity.Length <= text.Length)
-                        {
-                            string boldText = text.Substring(entity.Offset, entity.Length);
-                            sb.Append($"**{boldText}**");
-                        }
-                        break;
-
-                    case MessageEntityType.Italic:
-                        if (entity.Offset + entity.Length <= text.Length)
-                        {
-                            string italicText = text.Substring(entity.Offset, entity.Length);
-                            sb.Append($"*{italicText}*");
-                        }
-                        break;
-
-                    // Другие типы...
-                    default:
-                        sb.Append(text.Substring(entity.Offset, entity.Length));
-                        break;
-                }
-
-                lastIndex = entity.Offset + entity.Length;
+                return sb.ToString();
             }
 
-            if (lastIndex < text.Length)
+            public Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
             {
-                sb.Append(text.Substring(lastIndex));
+                Console.WriteLine($"Ошибка: {exception.Message}");
+                return Task.CompletedTask;
             }
-
-            return sb.ToString();
-        }
-
-        // Обработчик ошибок
-        private static Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
-        {
-            Console.WriteLine($"Ошибка: {exception.Message}");
-            return Task.CompletedTask;
         }
     }
 }
