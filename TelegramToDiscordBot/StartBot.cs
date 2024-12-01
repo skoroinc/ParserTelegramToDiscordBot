@@ -14,10 +14,6 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using TelegramToDiscordBot.Models;
 
-
-
-
-
 using TelegramMessageType = Telegram.Bot.Types.Enums.MessageType;
 
 
@@ -32,6 +28,9 @@ namespace TelegramToDiscordBot
         {
             try
             {
+                // Инициализация базы данных
+                DatabaseInitializer.Initialize();
+
                 // Загрузка конфигурации
                 var config = ConfigurationLoader.LoadConfig();
 
@@ -143,22 +142,36 @@ namespace TelegramToDiscordBot
 
                 try
                 {
-                    // Проверка текста без медиа
+                    // Проверка текстового сообщения
                     if (!string.IsNullOrEmpty(message.Text) && message.Type == TelegramMessageType.Text)
                     {
-                        if (message.Text.Length > 2000)
+                        // Фильтруем текст перед отправкой
+                        string filteredText = FilterMessage(message.Text);
+
+                        // Проверяем, не стало ли сообщение пустым после фильтрации
+                        if (string.IsNullOrWhiteSpace(filteredText))
                         {
-                            Console.WriteLine("Текстовое сообщение превышает 2000 символов и не будет отправлено.");
-                            return;
+                            Console.WriteLine("Сообщение удалено после фильтрации.");
+                            return; // Не отправляем пустое сообщение
                         }
 
-                        string formattedText = FormatTelegramHtmlToMarkdown(message.Text, message.Entities);
+                        // Форматируем текст и отправляем в Discord
+                        string formattedText = FormatTelegramHtmlToMarkdown(filteredText, message.Entities);
+
+                        // Если есть подпись, добавим её
+                        if (!string.IsNullOrEmpty(message.Caption))
+                        {
+                            string formattedCaption = FormatTelegramHtmlToMarkdown(message.Caption, message.CaptionEntities);
+                            formattedText += $"\n\n{formattedCaption}";
+                        }
+
                         var textBuilder = new DiscordMessageBuilder().WithContent(formattedText);
                         await _discordHandler.SendMessageAsync(textBuilder);
+
                         Console.WriteLine("Текстовое сообщение отправлено в Discord.");
                     }
 
-                    // Собираем медиафайлы
+                    // Обработка медиафайлов
                     var mediaFiles = new List<FileDetails>();
                     switch (message.Type)
                     {
@@ -185,6 +198,29 @@ namespace TelegramToDiscordBot
                 }
             }
 
+            //Метод фильтрации сообщений
+            public static string FilterMessage(string message)
+            {
+                var keywords = KeywordRepository.GetKeywords(); // Получаем ключевые слова из базы данных
+                Console.WriteLine($"Исходный текст: {message}");
+
+                foreach (var keyword in keywords)
+                {
+                    // Используем регулярные выражения для удаления ключевых слов
+                    var regex = new Regex(@"\b" + Regex.Escape(keyword) + @"\b", RegexOptions.IgnoreCase);
+                    message = regex.Replace(message, string.Empty);  // Удаляем ключевое слово из текста
+                    Console.WriteLine($"После удаления '{keyword}': {message}");
+                }
+
+                // Убираем лишние пробелы после удаления ключевых слов
+                message = Regex.Replace(message, @"\s+", " ").Trim();
+                Console.WriteLine($"После удаления лишних пробелов: {message}");
+
+                return message; // Возвращаем очищенное сообщение
+            }
+
+
+            //Метод обработки подписи
             private async Task HandleMediaMessage(Message message, List<FileDetails> mediaFiles, CancellationToken cancellationToken)
             {
                 string? caption = message.Caption;
@@ -196,6 +232,20 @@ namespace TelegramToDiscordBot
                     caption = null; // Удаляем подпись, чтобы не отправлять её
                 }
 
+                // Фильтруем подпись
+                if (!string.IsNullOrEmpty(caption))
+                {
+                    caption = FilterMessage(caption);
+
+                    // Проверяем, не стала ли подпись пустой после фильтрации
+                    if (string.IsNullOrWhiteSpace(caption))
+                    {
+                        Console.WriteLine("Подпись удалена после фильтрации.");
+                        caption = null; // Удаляем подпись
+                    }
+                }
+
+                // Обработка медиафайлов
                 switch (message.Type)
                 {
                     case TelegramMessageType.Photo:
@@ -212,10 +262,21 @@ namespace TelegramToDiscordBot
                         var documentFileId = message.Document!.FileId;
                         await AddMediaFile(documentFileId, "document", message.Document.MimeType ?? "application/octet-stream", mediaFiles, cancellationToken);
                         break;
+
+                    default:
+                        Console.WriteLine("Тип сообщения не поддерживается.");
+                        return;
                 }
 
                 Console.WriteLine("Медиафайлы собраны для отправки.");
+
+                // Если есть медиафайлы, отправляем их
+                if (mediaFiles.Any())
+                {
+                    await SendMediaFiles(message, mediaFiles.AsReadOnly(), cancellationToken);
+                }
             }
+
 
             private async Task AddMediaFile(string fileId, string fileName, string fileType, List<FileDetails> mediaFiles, CancellationToken cancellationToken)
             {
@@ -236,6 +297,8 @@ namespace TelegramToDiscordBot
                     FileType = fileType,
                     FileStream = fileStream
                 });
+
+                Console.WriteLine($"Медиафайл {fileName} добавлен в список.");
             }
 
             private async Task SendMediaFiles(Message telegramMessage, IReadOnlyCollection<FileDetails> fileDetailsList, CancellationToken cancellationToken)
@@ -255,6 +318,7 @@ namespace TelegramToDiscordBot
                     foreach (var fileDetails in fileDetailsList)
                     {
                         fileStreams.Add((fileDetails.FileName, fileDetails.FileStream));
+                        Console.WriteLine($"Добавлен файл {fileDetails.FileName} для отправки.");
                     }
 
                     if (fileStreams.Any())
@@ -262,6 +326,10 @@ namespace TelegramToDiscordBot
                         discordMessageBuilder.AddFiles(fileStreams.ToDictionary(fs => fs.FileName, fs => fs.FileStream));
                         await _discordHandler.SendMessageAsync(discordMessageBuilder);
                         Console.WriteLine("Медиафайлы отправлены в Discord.");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Нет медиафайлов для отправки.");
                     }
                 }
                 finally

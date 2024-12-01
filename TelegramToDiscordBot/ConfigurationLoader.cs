@@ -1,10 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 using System.IO;
 
-
-
-
-
 namespace TelegramToDiscordBot
 {
     public static class ConfigurationLoader
