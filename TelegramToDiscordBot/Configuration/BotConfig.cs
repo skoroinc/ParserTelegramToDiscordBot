@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 
-namespace TelegramToDiscordBot
+namespace TelegramToDiscordBot.Configuration
 {
     public class BotConfig
     {

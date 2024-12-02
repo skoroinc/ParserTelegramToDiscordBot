@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace TelegramToDiscordBot
+namespace TelegramToDiscordBot.Utilities
 {
     public static class DatabaseInitializer
     {

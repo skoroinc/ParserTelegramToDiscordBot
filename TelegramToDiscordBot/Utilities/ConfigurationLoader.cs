@@ -1,7 +1,8 @@
 ﻿using Microsoft.Extensions.Configuration;
 using System.IO;
+using TelegramToDiscordBot.Configuration;
 
-namespace TelegramToDiscordBot
+namespace TelegramToDiscordBot.Utilities
 {
     public static class ConfigurationLoader
     {
@@ -9,7 +10,7 @@ namespace TelegramToDiscordBot
         {
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory()) // Указываем текущую директорию
-                .AddJsonFile(configFileName, optional: false, reloadOnChange: true) // Подключаем файл
+                .AddJsonFile("Configuration/appsettings.json", optional: false, reloadOnChange: true) // Подключаем файл
                 .Build();
 
             // Проверим, что конфигурация загружена корректно
