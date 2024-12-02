@@ -142,8 +142,26 @@ namespace TelegramToDiscordBot
 
                 try
                 {
-                    // Проверка текстового сообщения
-                    if (!string.IsNullOrEmpty(message.Text) && message.Type == TelegramMessageType.Text)
+                    // Если сообщение содержит медиа
+                    if (message.Type == TelegramMessageType.Photo ||
+                        message.Type == TelegramMessageType.Video ||
+                        message.Type == TelegramMessageType.Document)
+                    {
+                        var mediaFiles = new List<FileDetails>();
+                        await HandleMediaMessage(message, mediaFiles, cancellationToken);
+
+                        // Если есть медиафайлы, отправляем их вместе с подписью
+                        if (mediaFiles.Any())
+                        {
+                            await SendMediaFiles(message, mediaFiles.AsReadOnly(), cancellationToken);
+                            Console.WriteLine("Медиафайлы отправлены.");
+                        }
+
+                        return; // Завершаем обработку, чтобы не обрабатывать текст отдельно
+                    }
+
+                    // Если сообщение текстовое и не связано с медиа
+                    if (!string.IsNullOrEmpty(message.Text))
                     {
                         // Фильтруем текст перед отправкой
                         string filteredText = FilterMessage(message.Text);
@@ -158,38 +176,10 @@ namespace TelegramToDiscordBot
                         // Форматируем текст и отправляем в Discord
                         string formattedText = FormatTelegramHtmlToMarkdown(filteredText, message.Entities);
 
-                        // Если есть подпись, добавим её
-                        if (!string.IsNullOrEmpty(message.Caption))
-                        {
-                            string formattedCaption = FormatTelegramHtmlToMarkdown(message.Caption, message.CaptionEntities);
-                            formattedText += $"\n\n{formattedCaption}";
-                        }
-
                         var textBuilder = new DiscordMessageBuilder().WithContent(formattedText);
                         await _discordHandler.SendMessageAsync(textBuilder);
 
                         Console.WriteLine("Текстовое сообщение отправлено в Discord.");
-                    }
-
-                    // Обработка медиафайлов
-                    var mediaFiles = new List<FileDetails>();
-                    switch (message.Type)
-                    {
-                        case TelegramMessageType.Photo:
-                        case TelegramMessageType.Video:
-                        case TelegramMessageType.Document:
-                            await HandleMediaMessage(message, mediaFiles, cancellationToken);
-                            break;
-
-                        default:
-                            Console.WriteLine("Тип сообщения не поддерживается.");
-                            return;
-                    }
-
-                    // Если есть медиафайлы, отправляем их
-                    if (mediaFiles.Any())
-                    {
-                        await SendMediaFiles(message, mediaFiles.AsReadOnly(), cancellationToken);
                     }
                 }
                 catch (Exception ex)
@@ -197,6 +187,7 @@ namespace TelegramToDiscordBot
                     Console.WriteLine($"Ошибка при обработке сообщения: {ex.Message}");
                 }
             }
+
 
             //Метод фильтрации сообщений
             public static string FilterMessage(string message)
@@ -243,6 +234,10 @@ namespace TelegramToDiscordBot
                         Console.WriteLine("Подпись удалена после фильтрации.");
                         caption = null; // Удаляем подпись
                     }
+                    else
+                    {
+                        Console.WriteLine($"Фильтрованная подпись: {caption}");
+                    }
                 }
 
                 // Обработка медиафайлов
@@ -269,12 +264,6 @@ namespace TelegramToDiscordBot
                 }
 
                 Console.WriteLine("Медиафайлы собраны для отправки.");
-
-                // Если есть медиафайлы, отправляем их
-                if (mediaFiles.Any())
-                {
-                    await SendMediaFiles(message, mediaFiles.AsReadOnly(), cancellationToken);
-                }
             }
 
 
@@ -305,10 +294,15 @@ namespace TelegramToDiscordBot
             {
                 var discordMessageBuilder = new DiscordMessageBuilder();
 
+                // Добавляем подпись, если она есть и не пустая
                 if (!string.IsNullOrEmpty(telegramMessage.Caption))
                 {
-                    string formattedCaption = FormatTelegramHtmlToMarkdown(telegramMessage.Caption, telegramMessage.CaptionEntities);
-                    discordMessageBuilder.WithContent(formattedCaption);
+                    string filteredCaption = FilterMessage(telegramMessage.Caption);
+                    if (!string.IsNullOrWhiteSpace(filteredCaption))
+                    {
+                        string formattedCaption = FormatTelegramHtmlToMarkdown(filteredCaption, telegramMessage.CaptionEntities);
+                        discordMessageBuilder.WithContent(formattedCaption);
+                    }
                 }
 
                 var fileStreams = new List<(string FileName, Stream FileStream)>();
@@ -351,6 +345,13 @@ namespace TelegramToDiscordBot
 
                 foreach (var entity in entities.OrderBy(e => e.Offset))
                 {
+                    // Убедимся, что Offset и Length находятся в пределах строки
+                    if (entity.Offset < 0 || entity.Offset >= text.Length || entity.Offset + entity.Length > text.Length)
+                    {
+                        Console.WriteLine($"Ошибка в сущности: Offset={entity.Offset}, Length={entity.Length}, TextLength={text.Length}");
+                        continue; // Пропускаем некорректные сущности
+                    }
+
                     if (lastIndex < entity.Offset)
                         sb.Append(text.Substring(lastIndex, entity.Offset - lastIndex));
 
