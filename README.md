@@ -4,7 +4,7 @@
 ![GitHub contributors](https://img.shields.io/github/contributors/your-repo/TelegramToDiscordBot?style=for-the-badge)
 ![GitHub issues](https://img.shields.io/github/issues/your-repo/TelegramToDiscordBot?style=for-the-badge)
 
-TelegramToDiscordBot — это кроссплатформенный бот для перенаправления сообщений из **Telegram** в **Discord** с поддержкой фильтрации ключевых слов, форматирования текста и динамической настройки.
+TelegramToDiscordBot — это парсинг бот для перенаправления сообщений из **Telegram** в **Discord** с поддержкой фильтрации ключевых слов, форматирования текста и динамической настройки.
 
 ---
 
